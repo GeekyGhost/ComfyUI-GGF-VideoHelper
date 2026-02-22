@@ -87,9 +87,8 @@ def cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
     total_frames = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps
 
-    width = 0
-
-    if width <=0 or height <=0:
+    # Fall back to reading first frame if CAP_PROP dimensions are unreliable (e.g. some GIFs)
+    if width <= 0 or height <= 0:
         _, frame = video_cap.retrieve()
         height, width, _ = frame.shape
 

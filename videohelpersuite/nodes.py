@@ -30,7 +30,7 @@ if 'GGF_video_formats' not in folder_paths.folder_names_and_paths:
     folder_paths.folder_names_and_paths["GGF_video_formats"] = ((),{".json"})
 if len(folder_paths.folder_names_and_paths['GGF_video_formats'][1]) == 0:
     folder_paths.folder_names_and_paths["GGF_video_formats"][1].add(".json")
-audio_extensions = ['mp3', 'mp4', 'wav', 'ogg']
+audio_extensions = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac']
 
 def flatten_list(l):
     ret = []
@@ -63,8 +63,22 @@ def iterate_format(video_format, for_widgets=True):
             yield from indirector(video_format, k)
 
 base_formats_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "video_formats")
-@cached(5)
+
+def _formats_mtime():
+    """Return a cache key that changes whenever any format file is added/removed/modified."""
+    try:
+        entries = list(os.scandir(base_formats_dir))
+        return max((e.stat().st_mtime for e in entries if e.name.endswith('.json')), default=0)
+    except OSError:
+        return 0
+
+_formats_cache = (None, -1)
+
 def get_video_formats():
+    global _formats_cache
+    current_mtime = _formats_mtime()
+    if _formats_cache[1] == current_mtime and _formats_cache[0] is not None:
+        return _formats_cache[0]
     format_files = {}
     for format_name in folder_paths.get_filename_list("GGF_video_formats"):
         format_files[format_name] = folder_paths.get_full_path("GGF_video_formats", format_name)
@@ -84,7 +98,9 @@ def get_video_formats():
         formats.append("video/" + format_name)
         if (len(widgets) > 0):
             format_widgets["video/"+ format_name] = widgets
-    return formats, format_widgets
+    result = (formats, format_widgets)
+    _formats_cache = (result, current_mtime)
+    return result
 
 def apply_format_widgets(format_name, kwargs):
     if os.path.exists(os.path.join(base_formats_dir, format_name + ".json")):
@@ -163,7 +179,6 @@ def ffmpeg_process(args, video_format, video_metadata, file_path, env):
             try:
                 while frame_data is not None:
                     proc.stdin.write(frame_data)
-                    #TODO: skip flush for increased speed
                     frame_data = yield
                     total_frames_output+=1
                 proc.stdin.flush()
@@ -254,7 +269,7 @@ class VideoCombine:
                     {"default": 8, "min": 1, "step": 1},
                 ),
                 "loop_count": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
-                "filename_prefix": ("STRING", {"default": "AnimateDiff"}),
+                "filename_prefix": ("STRING", {"default": "GGF_video"}),
                 "format": (["image/gif", "image/webp"] + ffmpeg_formats, {'formats': format_widgets}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "save_output": ("BOOLEAN", {"default": True}),
@@ -283,7 +298,7 @@ class VideoCombine:
         loop_count: int,
         images=None,
         latents=None,
-        filename_prefix="AnimateDiff",
+        filename_prefix="GGF_video",
         format="image/gif",
         pingpong=False,
         save_output=True,
@@ -638,7 +653,7 @@ class LoadAudio:
         #Hide ffmpeg formats if ffmpeg isn't available
         return {
             "required": {
-                "audio_file": ("STRING", {"default": "input/", "ggf_path_extensions": ['wav','mp3','ogg','m4a','flac']}),
+                "audio_file": ("STRING", {"default": "input/", "ggf_path_extensions": ['wav','mp3','ogg','flac','m4a','aac']}),
                 },
             "optional" : {
                 "seek_seconds": ("FLOAT", {"default": 0, "min": 0, "widgetType": "GGFTIMESTAMP"}),
@@ -675,11 +690,13 @@ class LoadAudioUpload:
     def INPUT_TYPES(s):
         input_dir = folder_paths.get_input_directory()
         files = []
-        for f in os.listdir(input_dir):
-            if os.path.isfile(os.path.join(input_dir, f)):
+        for root, dirs, filenames in os.walk(input_dir):
+            for f in filenames:
                 file_parts = f.split('.')
                 if len(file_parts) > 1 and (file_parts[-1] in audio_extensions):
-                    files.append(f)
+                    # Store relative path from input_dir so subfolders are shown
+                    rel = os.path.relpath(os.path.join(root, f), input_dir)
+                    files.append(rel.replace(os.sep, '/'))
         return {"required": {
                     "audio": (sorted(files),),},
                 "optional": {
@@ -721,7 +738,7 @@ class AudioToGGFAudio:
     CATEGORY = "GGF Video Helper Suite 🎥🅖🅖🅕/audio"
 
     RETURN_TYPES = ("GGF_AUDIO", )
-    RETURN_NAMES = ("vhs_audio",)
+    RETURN_NAMES = ("ggf_audio",)
     FUNCTION = "convert_audio"
 
     def convert_audio(self, audio):
@@ -754,12 +771,12 @@ class GGFAudioToAudio:
     RETURN_NAMES = ("audio",)
     FUNCTION = "convert_audio"
 
-    def convert_audio(self, vhs_audio):
-        if not vhs_audio or not vhs_audio():
+    def convert_audio(self, ggf_audio):
+        if not ggf_audio or not ggf_audio():
             raise Exception("audio input is not valid")
         args = [ffmpeg_path, "-i", '-']
         try:
-            res =  subprocess.run(args + ["-f", "f32le", "-"], input=vhs_audio(),
+            res =  subprocess.run(args + ["-f", "f32le", "-"], input=ggf_audio(),
                                   capture_output=True, check=True)
             audio = torch.frombuffer(bytearray(res.stdout), dtype=torch.float32)
         except subprocess.CalledProcessError as e:
@@ -1019,16 +1036,57 @@ class Unbatch:
 class SelectLatest:
     @classmethod
     def INPUT_TYPES(s):
-        return {"required": {"filename_prefix": ("STRING", {'default': 'output/AnimateDiff', 'ggf_path_extensions': []}),
-                             "filename_postfix": ("STRING", {"placeholder": ".webm"})}}
+        return {"required": {"filename_prefix": ("STRING", {'default': 'output/GGF_video', 'ggf_path_extensions': []}),
+                             "filename_postfix": ("STRING", {"placeholder": ".webm", "default": ".webm"})}}
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES =("Filename",)
+    RETURN_NAMES = ("Filename",)
     CATEGORY = "GGF Video Helper Suite 🎥🅖🅖🅕"
     FUNCTION = "select_latest"
-    EXPERIMENTAL = True
 
     def select_latest(self, filename_prefix, filename_postfix):
-        assert False, "Not Reachable"
+        # Resolve prefix against ComfyUI output and temp directories
+        search_dirs = [
+            folder_paths.get_output_directory(),
+            folder_paths.get_temp_directory(),
+        ]
+        filename_prefix = strip_path(filename_prefix)
+        filename_postfix = filename_postfix.strip()
+
+        best_path = None
+        best_mtime = -1
+
+        for base_dir in search_dirs:
+            # Support subfolder in prefix e.g. "subfolder/GGF_video"
+            prefix_path = os.path.join(base_dir, filename_prefix)
+            search_dir = os.path.dirname(prefix_path)
+            name_prefix = os.path.basename(prefix_path)
+
+            if not os.path.isdir(search_dir):
+                continue
+
+            for fname in os.listdir(search_dir):
+                if not fname.startswith(name_prefix):
+                    continue
+                if filename_postfix and not fname.endswith(filename_postfix):
+                    continue
+                full = os.path.join(search_dir, fname)
+                if not os.path.isfile(full):
+                    continue
+                mtime = os.path.getmtime(full)
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_path = full
+
+        if best_path is None:
+            raise FileNotFoundError(
+                f"No file matching prefix '{filename_prefix}' and postfix '{filename_postfix}' found."
+            )
+        return (best_path,)
+
+    @classmethod
+    def IS_CHANGED(s, filename_prefix, filename_postfix):
+        # Always re-evaluate so the latest file is always returned
+        return float("nan")
 
 NODE_CLASS_MAPPINGS = {
     "GGF_VideoCombine": VideoCombine,

@@ -1122,6 +1122,28 @@ function addVideoPreview(nodeType, isInput=true) {
             doQuery()
         }
         previewWidget.callback = previewWidget.updateSource
+        // Show metadata PNG thumbnail while video is loading/buffering
+        previewWidget.videoEl.addEventListener("loadstart", () => {
+            if (previewWidget.value?.params?.workflow) {
+                let thumbParams = {
+                    filename: previewWidget.value.params.workflow,
+                    subfolder: previewWidget.value.params.subfolder || '',
+                    type: previewWidget.value.params.type || 'output'
+                };
+                previewWidget.imgEl.src = api.apiURL('/view?' + new URLSearchParams(thumbParams));
+                previewWidget.imgEl.hidden = false;
+            }
+        });
+        previewWidget.videoEl.addEventListener("canplay", () => {
+            // Video is ready — hide the thumbnail
+            previewWidget.imgEl.hidden = true;
+        });
+        previewWidget.videoEl.addEventListener("error", () => {
+            // Video failed to load — keep thumbnail visible if present
+            if (!previewWidget.imgEl.src) {
+                previewWidget.parentEl.hidden = true;
+            }
+        });
         previewWidget.parentEl.appendChild(previewWidget.videoEl)
         previewWidget.parentEl.appendChild(previewWidget.imgEl)
     });
