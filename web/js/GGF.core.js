@@ -853,11 +853,15 @@ function addAudioPreview(nodeType, isInput=true) {
             },
         });
         previewWidget.computeSize = function(width) {
+            if (this.hidden) {
+                return [width, -4];
+            }
             return [width, 50];
         }
-                element.addEventListener("error", () => {
-            // Gracefully handle missing/404 audio files instead of hard-aborting
-            previewWidget.hidden = true;
+        // Start hidden — shown by updateSource once a valid file is selected
+        previewWidget.hidden = true;
+        element.addEventListener("error", () => {
+            // On error, clear src but keep widget visible so user can retry
             element.removeAttribute("src");
             fitHeight(previewNode);
         });
@@ -887,6 +891,10 @@ function addAudioPreview(nodeType, isInput=true) {
             if (this.value.params == undefined) {
                 return;
             }
+            // Only show the player if a filename has actually been selected
+            if (!this.value.params.filename) {
+                return;
+            }
             let params =  {}
             let advp = app.ui.settings.getSettingValue("GGF.AdvancedPreviews")
             if (advp == 'Never') {
@@ -898,6 +906,9 @@ function addAudioPreview(nodeType, isInput=true) {
             }
             Object.assign(params, this.value.params);//shallow copy
             params.timestamp = Date.now()
+            // Unhide the widget now that we have a valid file to load
+            previewWidget.hidden = false;
+            fitHeight(previewNode);
             if (!advp) {
                 element.src = api.apiURL('/view?' + new URLSearchParams(params));
             } else {
